@@ -31,3 +31,16 @@ No old account records are imported.
 - POST /bookings/:id/cancel
 - GET /admin/flights
 - GET /admin/bookings
+
+
+## Reusable data platform
+
+Lupin Airlines is the first consumer of this backend, but `lupin-data` is intentionally broader than Airlines.
+
+Reusable business/data logic lives under `services/`, shared storage helpers live under `core/`, and project data lives under `data/`.
+
+For example, the flight service provides `getFlights()`, `getFlight()`, `addFlight()`, `updateFlight()`, and `removeFlight()`. Other projects can receive similarly isolated services later.
+
+The public website does **not** import this private repository directly. It calls the running API over HTTPS. This keeps private code, credentials, and project data on the server side.
+
+See [API.md](API.md) for the service architecture.
