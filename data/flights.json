@@ -1,0 +1,13 @@
+[
+  {"flight":"LP 001","destination":"Lupin's House","gate":"L","departure":"08:15","price":"S$101"},
+  {"flight":"LP 002","destination":"Mdm Wrong-Wrong's House","gate":"WW","departure":"09:45","price":"S$202"},
+  {"flight":"LP 003","destination":"Somewhere Good","gate":"G","departure":"11:00","price":"S$303"},
+  {"flight":"LP 004","destination":"Somewhere Better","gate":"B","departure":"12:30","price":"S$404"},
+  {"flight":"LP 005","destination":"Somewhere Even Better","gate":"EB","departure":"14:00","price":"S$505"},
+  {"flight":"LP 006","destination":"Somewhere Best","gate":"S","departure":"15:30","price":"S$606"},
+  {"flight":"LP 000","destination":"Somewhere Worst","gate":"W","departure":"17:00","price":"S$0"},
+  {"flight":"LP 404","destination":"Somewhere Nice","gate":"N","departure":"18:15","price":"S$404"},
+  {"flight":"LP 007","destination":"Scraggy's House","gate":"SG","departure":"19:30","price":"S$707"},
+  {"flight":"LP 314","destination":"Singapore, Probably","gate":"SGP","departure":"21:00","price":"S$314"},
+  {"flight":"LP 9001","destination":"The Moon","gate":"M","departure":"23:59","price":"S$9001"}
+]
