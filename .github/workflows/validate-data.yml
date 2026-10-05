@@ -1,0 +1,35 @@
+name: Validate Lupin Data
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON data
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for p in Path("data").glob("*.json"):
+              with p.open(encoding="utf-8") as f:
+                  json.load(f)
+              print("OK:", p)
+          PY
+      - name: Validate flight records
+        run: |
+          python - <<'PY'
+          import json
+          flights=json.load(open("data/flights.json", encoding="utf-8"))
+          codes=[f["flight"] for f in flights]
+          assert len(codes)==len(set(codes)), "Duplicate flight code"
+          for f in flights:
+              for key in ("flight","destination","gate","departure","price"):
+                  assert key in f, f"Missing {key} in {f}"
+          print(f"Validated {len(flights)} flights")
+          PY
