@@ -3,7 +3,7 @@ const cors=require('cors');
 const bcrypt=require('bcryptjs');
 const Database=require('better-sqlite3');
 const crypto=require('crypto');
-const flights=require('./data/flights.json');
+const {flights}=require('./services');
 
 const app=express();
 const db=new Database(process.env.DATABASE_PATH||'lupin.db');
@@ -49,10 +49,10 @@ const authUser=(req,res,next)=>{
  req.user=row;next();
 };
 const makeToken=id=>String(id)+'.'+crypto.randomBytes(24).toString('hex');
-const findFlight=code=>flights.find(f=>f.flight===code);
+const findFlight=code=>flights.getFlight(code);
 
 app.get('/health',(req,res)=>res.json({ok:true,service:'lupin-data'}));
-app.get('/flights',(req,res)=>res.json({flights}));
+app.get('/flights',(req,res)=>res.json({flights:flights.getFlights()}));
 
 app.post('/auth/register',async(req,res)=>{
  const username=cleanUsername(req.body.username),password=String(req.body.password||'');
@@ -83,7 +83,7 @@ app.post('/bookings',authUser,(req,res)=>{
  const bookingId='LUP-'+crypto.randomBytes(3).toString('hex').toUpperCase();
  const miles=500;
  db.prepare('INSERT INTO bookings(booking_id,user_id,name,flight,destination,date,time,gate,passengers,fare,miles_earned,status,booked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
-  .run(bookingId,req.user.id,String(req.body.name||req.user.username).slice(0,40),f.flight,f.destination,String(req.body.date||''),f.departure,f.gate,String(req.body.passengers||'1 passenger'),Number(f.price.replace(/[^0-9]/g,''))||0,miles,'Confirmed',new Date().toISOString());
+  .run(bookingId,req.user.id,String(req.body.name||req.user.username).slice(0,40),f.flight,f.destination,String(req.body.date||''),f.departure,f.gate,String(req.body.passengers||'1 passenger'),Number(String(f.price).replace(/[^0-9]/g,''))||0,miles,'Confirmed',new Date().toISOString());
  db.prepare('UPDATE users SET miles=miles+? WHERE id=?').run(miles,req.user.id);
  res.status(201).json({ok:true,bookingId,milesEarned:miles});
 });
@@ -102,7 +102,7 @@ const admin=(req,res,next)=>{
  if(supplied!==ADMIN_PASSWORD)return res.status(401).json({error:'Admin authentication required.'});
  next();
 };
-app.get('/admin/flights',admin,(req,res)=>res.json({flights}));
+app.get('/admin/flights',admin,(req,res)=>res.json({flights:flights.getFlights()}));
 app.get('/admin/bookings',admin,(req,res)=>{
  const bookings=db.prepare('SELECT booking_id,username,flight,destination,date,time,gate,passengers,fare,status,booked_at FROM bookings JOIN users ON users.id=bookings.user_id ORDER BY bookings.id DESC').all();
  res.json({bookings});
