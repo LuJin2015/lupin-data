@@ -1,40 +1,29 @@
-# Lupin Data API
+# Lupin Data
 
-`lupin-data` is a reusable backend/data service. Lupin Airlines is currently its first client.
+Lupin Data is now a GitHub-native data repository rather than a required always-running API.
 
-## Design
+## Public data
 
-Projects call the API instead of reading another project's private repository directly.
+The main public data endpoint is the repository's raw JSON:
 
-- `/flights` — public flight catalogue
-- `/auth/*` — account/session services
-- `/bookings/*` — Airlines booking service
-- `/admin/*` — protected management endpoints
+`data/flights.json`
 
-Future projects can add their own service under `services/` without turning the whole repository into an Airlines-specific codebase.
+The Lupin Airlines Pages site reads it directly.
 
 ## Data service pattern
 
-Each service exposes reusable functions. For example:
+Shared data belongs in `data/`. Validation and automation belong in `.github/workflows/`.
 
-```js
-const {flights}=require('./services');
+For a new project, add a clearly named JSON data file and a validation workflow rather than creating a project-specific server.
 
-flights.getFlights();
-flights.getFlight('LP 001');
-flights.addFlight({
-  flight:'LP 008',
-  destination:'Somewhere New',
-  gate:'N',
-  departure:'18:00',
-  price:'S$808'
-});
-```
+## Current limitations
 
-The HTTP API exposes approved operations from those services to authorized clients.
+GitHub Pages is static. It cannot receive arbitrary POST requests from visitors.
 
-## Security boundary
+Therefore the current Lupin Airlines website keeps account/session and booking state in browser storage. GitHub-hosted public flight data remains shared across visitors.
 
-Client websites must never import private server files directly or receive database credentials. They communicate with the running API over HTTPS.
+Future GitHub Actions can process controlled repository changes without requiring an external server.
 
-Keep project-specific data isolated and add authentication/authorization before exposing a new service.
+## Security
+
+Never put GitHub tokens, passwords, or other secrets in public website code or JSON data.
