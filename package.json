@@ -1,0 +1,9 @@
+{
+  "name":"lupin-data",
+  "private":true,
+  "version":"1.0.0",
+  "description":"Backend API for Lupin Airlines",
+  "main":"server.js",
+  "scripts":{"start":"node server.js"},
+  "dependencies":{"better-sqlite3":"^11.8.1","bcryptjs":"^3.0.2","express":"^5.1.0","cors":"^2.8.5","cookie-parser":"^1.4.7"}
+}
