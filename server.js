@@ -103,6 +103,19 @@ const admin=(req,res,next)=>{
  next();
 };
 app.get('/admin/flights',admin,(req,res)=>res.json({flights:flights.getFlights()}));
+app.post('/admin/flights',admin,(req,res)=>{
+  try{res.status(201).json({ok:true,flight:flights.addFlight(req.body)})}
+  catch(e){res.status(400).json({error:e.message})}
+});
+app.patch('/admin/flights/:code',admin,(req,res)=>{
+  const flight=flights.updateFlight(req.params.code,req.body);
+  if(!flight)return res.status(404).json({error:'Flight not found.'});
+  res.json({ok:true,flight});
+});
+app.delete('/admin/flights/:code',admin,(req,res)=>{
+  if(!flights.removeFlight(req.params.code))return res.status(404).json({error:'Flight not found.'});
+  res.json({ok:true});
+});
 app.get('/admin/bookings',admin,(req,res)=>{
  const bookings=db.prepare('SELECT booking_id,username,flight,destination,date,time,gate,passengers,fare,status,booked_at FROM bookings JOIN users ON users.id=bookings.user_id ORDER BY bookings.id DESC').all();
  res.json({bookings});
