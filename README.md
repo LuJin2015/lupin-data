@@ -1,46 +1,60 @@
 # Lupin Data
 
-Private backend/data service for Lupin Airlines.
+GitHub-native data repository for Lupin Airlines and future projects.
 
-## Fresh account system
+## Architecture
 
-The previous user/account dataset is retired and is **not migrated**. New users can register and create new bookings.
+This repository is the data layer for a GitHub-only setup:
 
-No Google Apps Script or Google Sheets is used.
+- **GitHub Pages** hosts the Lupin Airlines website.
+- **GitHub Actions** validates repository data and can run automation.
+- **JSON files in `data/`** are the source of truth for shared public data.
+- The website reads public JSON directly from GitHub.
 
-The existing admin password remains the configured admin password, but it must be supplied through the deployment environment as `LUPIN_ADMIN_PASSWORD`; never commit it.
+There is no required Render server, Google Apps Script, Google Sheets, or external database.
 
-## Privacy banner
+## Data
 
-The public site should display:
+Current data files:
 
-> Privacy update: previous Lupin Airlines account data has been retired. New accounts and bookings are supported, and information needed to operate your account is stored securely.
+- `data/flights.json` — flight catalogue
+- `data/accounts.json` — reserved for future GitHub automation
+- `data/bookings.json` — reserved for future GitHub automation
 
-No old account records are imported.
+The public website currently keeps visitor account/session and booking state in the browser, because GitHub Pages is static and cannot directly accept arbitrary database writes.
 
-## API
+## Adding a flight
 
-- GET /health
-- GET /flights
-- POST /auth/register
-- POST /auth/login
-- POST /auth/logout
-- GET /me
-- GET /me/bookings
-- POST /bookings
-- POST /bookings/:id/cancel
-- GET /admin/flights
-- GET /admin/bookings
+Edit only:
 
+```
+data/flights.json
+```
 
-## Reusable data platform
+Add another object to the list, for example:
 
-Lupin Airlines is the first consumer of this backend, but `lupin-data` is intentionally broader than Airlines.
+```json
+{
+  "flight": "LP 008",
+  "destination": "Somewhere New",
+  "gate": "N",
+  "departure": "18:00",
+  "price": "S$808"
+}
+```
 
-Reusable business/data logic lives under `services/`, shared storage helpers live under `core/`, and project data lives under `data/`.
+The Flights, Booking, and Flight Status pages load the list automatically.
 
-For example, the flight service provides `getFlights()`, `getFlight()`, `addFlight()`, `updateFlight()`, and `removeFlight()`. Other projects can receive similarly isolated services later.
+## GitHub Actions
 
-The public website does **not** import this private repository directly. It calls the running API over HTTPS. This keeps private code, credentials, and project data on the server side.
+`.github/workflows/validate-data.yml` checks JSON and validates flight records whenever data changes.
 
-See [API.md](API.md) for the service architecture.
+The Airlines repository has its own GitHub Pages deployment workflow.
+
+## Privacy
+
+Previous Lupin Airlines account data was retired and is not migrated.
+
+## Important
+
+Do not store passwords, tokens, or other secrets in public JSON files. GitHub Actions secrets should be used for any future automation that needs credentials.
