@@ -1,6 +1,5 @@
 node_modules/
 .env
 .env.*
-!.env.example
-*.sqlite
+lupin.db
 *.db
