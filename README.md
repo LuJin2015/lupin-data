@@ -1,60 +1,53 @@
 # Lupin Data
 
-GitHub-native data repository for Lupin Airlines and future projects.
+Shared GitHub cloud data platform for Lupin Airlines and future projects.
 
 ## Architecture
 
-This repository is the data layer for a GitHub-only setup:
+- GitHub Pages hosts project frontends.
+- GitHub Actions performs controlled data mutations.
+- JSON under `data/<project>/` is the cloud source of truth.
+- Projects can share this repository while keeping their data namespaced.
+- No Render, Google Apps Script, Google Sheets, or external database is required.
 
-- **GitHub Pages** hosts the Lupin Airlines website.
-- **GitHub Actions** validates repository data and can run automation.
-- **JSON files in `data/`** are the source of truth for shared public data.
-- The website reads public JSON directly from GitHub.
-
-There is no required Render server, Google Apps Script, Google Sheets, or external database.
-
-## Data
-
-Current data files:
-
-- `data/flights.json` — flight catalogue
-- `data/accounts.json` — reserved for future GitHub automation
-- `data/bookings.json` — reserved for future GitHub automation
-
-The public website currently keeps visitor account/session and booking state in the browser, because GitHub Pages is static and cannot directly accept arbitrary database writes.
-
-## Adding a flight
-
-Edit only:
+## Lupin Airlines
 
 ```
-data/flights.json
+data/lupin-airlines/
+├── flights.json
+├── accounts.json
+└── bookings.json
 ```
 
-Add another object to the list, for example:
+Add or edit flights in `data/lupin-airlines/flights.json`. The Airlines site loads that single catalogue.
 
-```json
-{
-  "flight": "LP 008",
-  "destination": "Somewhere New",
-  "gate": "N",
-  "departure": "18:00",
-  "price": "S$808"
-}
+Accounts contain a username, password hash, miles balance, and creation time. Bookings contain the booking record and status. GitHub Actions updates these files for register, book, and cancel operations.
+
+## Cloud write workflow
+
+`.github/workflows/lupin-airlines-cloud.yml` accepts a workflow dispatch with an operation and JSON payload. The runner updates the appropriate files and commits them back to `main`.
+
+The workflow uses a concurrency group so simultaneous requests are processed one at a time.
+
+## Validation
+
+`.github/workflows/validate-data.yml` validates every JSON file recursively and checks the Lupin Airlines flight catalogue for required fields and duplicate flight codes.
+
+## Shared-project model
+
+Future projects should use:
+
+```
+data/<project-name>/
 ```
 
-The Flights, Booking, and Flight Status pages load the list automatically.
-
-## GitHub Actions
-
-`.github/workflows/validate-data.yml` checks JSON and validates flight records whenever data changes.
-
-The Airlines repository has its own GitHub Pages deployment workflow.
+so several repositories can share this cloud repository without mixing their records.
 
 ## Privacy
 
-Previous Lupin Airlines account data was retired and is not migrated.
+Previous Lupin Airlines account data was retired and is not migrated. This repository is public, so the data stored here should be treated as public. Passwords are stored as hashes rather than plaintext.
 
-## Important
+## Authentication
 
-Do not store passwords, tokens, or other secrets in public JSON files. GitHub Actions secrets should be used for any future automation that needs credentials.
+The Lupin Airlines website uses GitHub authorization to let an authorized project collaborator trigger the cloud workflow. Each person using write operations needs GitHub access to this repository.
+
