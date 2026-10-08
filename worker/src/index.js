@@ -1,162 +1,18 @@
 const headers = (origin) => ({
-  "content-type": "application/json; charset=utf-8",
-  "access-control-allow-origin": origin || "*",
-  "access-control-allow-headers": "content-type, authorization",
-  "access-control-allow-methods": "GET, POST, OPTIONS"
+  "content-type":"application/json; charset=utf-8","access-control-allow-origin":origin||"*","access-control-allow-headers":"content-type, authorization","access-control-allow-methods":"GET, POST, OPTIONS","cache-control":"no-store"
 });
-
-const reply = (data, status, origin) => new Response(JSON.stringify(data), {
-  status: status || 200, headers: headers(origin)
-});
-
-const enc = new TextEncoder();
-const iso = () => new Date().toISOString();
-
-async function sha(value) {
-  const b = await crypto.subtle.digest("SHA-256", enc.encode(value));
-  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join("");
-}
-
-async function hashPassword(password) {
-  const salt = crypto.randomUUID();
-  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits(
-    {name:"PBKDF2", salt:enc.encode(salt), iterations:100000, hash:"SHA-256"},
-    key, 256
-  );
-  return salt + "$" + [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, "0")).join("");
-}
-
-async function checkPassword(password, stored) {
-  const p = String(stored).split("$");
-  if (p.length !== 2) return false;
-  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits(
-    {name:"PBKDF2", salt:enc.encode(p[0]), iterations:100000, hash:"SHA-256"},
-    key, 256
-  );
-  const actual = [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, "0")).join("");
-  return actual === p[1];
-}
-
-function randomToken() {
-  const b = new Uint8Array(32);
-  crypto.getRandomValues(b);
-  return [...b].map(x => x.toString(16).padStart(2, "0")).join("");
-}
-
-function bookingId() {
-  return "LUP-" + crypto.randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase();
-}
-
-async function airline(db, slug) {
-  return db.prepare("SELECT * FROM airlines WHERE slug=?").bind(slug).first();
-}
-
-async function ensureAirline(db, slug) {
-  let a = await airline(db, slug);
-  if (a) return a;
-  await db.prepare("INSERT INTO airlines(slug,name,created_at) VALUES(?,?,?)")
-    .bind(slug, slug === "lupin-airlines" ? "Lupin Airlines" : slug, iso()).run();
-  return airline(db, slug);
-}
-
-async function currentUser(db, request) {
-  const auth = request.headers.get("authorization") || "";
-  const token = auth.replace(/^Bearer\\s+/i, "").trim();
-  if (!token) return null;
-  const hash = await sha(token);
-  return db.prepare(
-    "SELECT users.*,airlines.slug AS airline_slug FROM sessions JOIN users ON users.id=sessions.user_id JOIN airlines ON airlines.id=users.airline_id WHERE sessions.token_hash=? AND sessions.expires_at>?"
-  ).bind(hash, iso()).first();
-}
-
-export default {
-  async fetch(request, env) {
-    const origin = env.CORS_ORIGIN || "*";
-    if (request.method === "OPTIONS") return new Response(null, {status:204,headers:headers(origin)});
-    const url = new URL(request.url);
-    const p = url.pathname.split("/").filter(Boolean);
-
-    try {
-      if (p[0] !== "api") return reply({ok:true,service:"lupin-cloud"},200,origin);
-      const slug = p[1];
-
-      if (p.length === 3 && p[2] === "flights" && request.method === "GET") {
-        const a = await airline(env.DB, slug);
-        if (!a) return reply({flights:[]},200,origin);
-        const r = await env.DB.prepare("SELECT flight,destination,gate,departure,price FROM flights WHERE airline_id=? ORDER BY id").bind(a.id).all();
-        return reply({flights:r.results},200,origin);
-      }
-
-      if (p.length === 3 && p[2] === "register" && request.method === "POST") {
-        const b = await request.json();
-        const username = String(b.username || "").trim();
-        const password = String(b.password || "");
-        if (!/^[A-Za-z0-9_-]{3,20}$/.test(username)) return reply({error:"Username must be 3–20 letters, numbers, _ or -."},400,origin);
-        if (password.length < 6) return reply({error:"Password must be at least 6 characters."},400,origin);
-        const a = await ensureAirline(env.DB, slug);
-        const exists = await env.DB.prepare("SELECT id FROM users WHERE airline_id=? AND username=?").bind(a.id,username).first();
-        if (exists) return reply({error:"That username is already in use."},409,origin);
-        const ph = await hashPassword(password);
-        const r = await env.DB.prepare("INSERT INTO users(airline_id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(a.id,username,ph,iso()).run();
-        const t = randomToken();
-        await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").bind(await sha(t),r.meta.last_row_id,new Date(Date.now()+2592000000).toISOString()).run();
-        return reply({ok:true,username,miles:0,token:t},201,origin);
-      }
-
-      if (p.length === 3 && p[2] === "login" && request.method === "POST") {
-        const b = await request.json();
-        const a = await airline(env.DB,slug);
-        if (!a) return reply({error:"Incorrect username or password."},401,origin);
-        const u = await env.DB.prepare("SELECT * FROM users WHERE airline_id=? AND username=?").bind(a.id,String(b.username||"").trim()).first();
-        if (!u || !(await checkPassword(String(b.password||""),u.password_hash))) return reply({error:"Incorrect username or password."},401,origin);
-        const t = randomToken();
-        await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").bind(await sha(t),u.id,new Date(Date.now()+2592000000).toISOString()).run();
-        return reply({ok:true,username:u.username,miles:u.miles,token:t},200,origin);
-      }
-
-      const u = await currentUser(env.DB,request);
-      if (p.length === 3 && p[2] === "me" && request.method === "GET") {
-        if (!u || u.airline_slug !== slug) return reply({error:"Please log in."},401,origin);
-        return reply({username:u.username,miles:u.miles},200,origin);
-      }
-
-      if (p.length === 3 && p[2] === "bookings" && request.method === "GET") {
-        if (!u || u.airline_slug !== slug) return reply({error:"Please log in."},401,origin);
-        const r = await env.DB.prepare("SELECT booking_id AS bookingId,flight,destination,date,time,gate,passengers,fare,status,booked_at AS bookedAt,miles_earned AS milesEarned FROM bookings WHERE user_id=? ORDER BY id DESC").bind(u.id).all();
-        return reply({bookings:r.results},200,origin);
-      }
-
-      if (p.length === 3 && p[2] === "bookings" && request.method === "POST") {
-        if (!u || u.airline_slug !== slug) return reply({error:"Please log in."},401,origin);
-        const b = await request.json();
-        const f = await env.DB.prepare("SELECT * FROM flights WHERE airline_id=? AND flight=?").bind(u.airline_id,String(b.flight||"")).first();
-        if (!f) return reply({error:"Flight not found."},400,origin);
-        const id = bookingId(), miles = 500;
-        const fare = Number(String(f.price).replace(/[^0-9]/g,"")) || 0;
-        await env.DB.batch([
-          env.DB.prepare("INSERT INTO bookings(booking_id,user_id,airline_id,name,flight,destination,date,time,gate,passengers,fare,miles_earned,status,booked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,u.id,u.airline_id,String(b.name||u.username).slice(0,40),f.flight,f.destination,String(b.date||""),f.departure,f.gate,String(b.passengers||"1 passenger"),fare,miles,"Confirmed",iso()),
-          env.DB.prepare("UPDATE users SET miles=miles+? WHERE id=?").bind(miles,u.id)
-        ]);
-        return reply({ok:true,bookingId:id,milesEarned:miles},201,origin);
-      }
-
-      if (p.length === 5 && p[2] === "bookings" && p[4] === "cancel" && request.method === "POST") {
-        if (!u || u.airline_slug !== slug) return reply({error:"Please log in."},401,origin);
-        const b = await env.DB.prepare("SELECT * FROM bookings WHERE booking_id=? AND user_id=?").bind(p[3],u.id).first();
-        if (!b) return reply({error:"Booking not found."},404,origin);
-        if (b.status === "Cancelled") return reply({error:"Booking is already cancelled."},400,origin);
-        await env.DB.batch([
-          env.DB.prepare("UPDATE bookings SET status='Cancelled' WHERE booking_id=? AND user_id=?").bind(p[3],u.id),
-          env.DB.prepare("UPDATE users SET miles=MAX(0,miles-?) WHERE id=?").bind(b.miles_earned,u.id)
-        ]);
-        return reply({ok:true},200,origin);
-      }
-
-      return reply({error:"Not found."},404,origin);
-    } catch (e) {
-      return reply({error:"Server error.",detail:String(e.message || e)},500,origin);
-    }
-  }
-};
+const reply=(data,status,origin)=>new Response(JSON.stringify(data),{status:status||200,headers:headers(origin)});const enc=new TextEncoder();const iso=()=>new Date().toISOString();
+async function sha(v){const b=await crypto.subtle.digest("SHA-256",enc.encode(v));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
+async function hashPassword(password){const salt=crypto.randomUUID();const key=await crypto.subtle.importKey("raw",enc.encode(password),"PBKDF2",false,["deriveBits"]);const bits=await crypto.subtle.deriveBits({name:"PBKDF2",salt:enc.encode(salt),iterations:100000,hash:"SHA-256"},key,256);return salt+"$"+[...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,"0")).join("")}
+async function checkPassword(password,stored){const p=String(stored).split("$");if(p.length!==2)return false;const key=await crypto.subtle.importKey("raw",enc.encode(password),"PBKDF2",false,["deriveBits"]);const bits=await crypto.subtle.deriveBits({name:"PBKDF2",salt:enc.encode(p[0]),iterations:100000,hash:"SHA-256"},key,256);const actual=[...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,"0")).join("");return actual===p[1]}
+function randomToken(){const b=new Uint8Array(32);crypto.getRandomValues(b);return [...b].map(x=>x.toString(16).padStart(2,"0")).join("")}function bookingId(){return "LUP-"+crypto.randomUUID().replaceAll("-","").slice(0,6).toUpperCase()}
+async function airline(db,slug){return db.prepare("SELECT * FROM airlines WHERE slug=?").bind(slug).first()}async function ensureAirline(db,slug){let a=await airline(db,slug);if(a)return a;await db.prepare("INSERT INTO airlines(slug,name,created_at) VALUES(?,?,?)").bind(slug,slug==="lupin-airlines"?"Lupin Airlines":slug,iso()).run();return airline(db,slug)}
+async function currentUser(db,request){const auth=request.headers.get("authorization")||"",token=auth.replace(/^Bearer\\s+/i,"").trim();if(!token)return null;const hash=await sha(token);return db.prepare("SELECT users.*,airlines.slug AS airline_slug FROM sessions JOIN users ON users.id=sessions.user_id JOIN airlines ON airlines.id=users.airline_id WHERE sessions.token_hash=? AND sessions.expires_at>?").bind(hash,iso()).first()}
+export default {async fetch(request,env){const origin=env.CORS_ORIGIN||"*";if(request.method==="OPTIONS")return new Response(null,{status:204,headers:headers(origin)});const url=new URL(request.url),p=url.pathname.split("/").filter(Boolean);try{if(p[0]!=="api")return reply({ok:true,service:"lupin-cloud"},200,origin);const slug=p[1];
+if(p.length===3&&p[2]==="flights"&&request.method==="GET"){const a=await airline(env.DB,slug);if(!a)return reply({flights:[]},200,origin);const r=await env.DB.prepare("SELECT flight,destination,gate,departure,price FROM flights WHERE airline_id=? ORDER BY id").bind(a.id).all();return reply({flights:r.results},200,origin)}
+if(p.length===3&&p[2]==="register"&&request.method==="POST"){const b=await request.json(),username=String(b.username||"").trim(),password=String(b.password||"");if(!/^[A-Za-z0-9_-]{3,20}$/.test(username))return reply({error:"Username must be 3–20 letters, numbers, _ or -."},400,origin);if(password.length<6)return reply({error:"Password must be at least 6 characters."},400,origin);const a=await ensureAirline(env.DB,slug),exists=await env.DB.prepare("SELECT id FROM users WHERE airline_id=? AND username=?").bind(a.id,username).first();if(exists)return reply({error:"That username is already in use."},409,origin);const ph=await hashPassword(password),r=await env.DB.prepare("INSERT INTO users(airline_id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(a.id,username,ph,iso()).run(),t=randomToken();await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").bind(await sha(t),r.meta.last_row_id,new Date(Date.now()+2592000000).toISOString()).run();return reply({ok:true,username,miles:0,token:t},201,origin)}
+if(p.length===3&&p[2]==="login"&&request.method==="POST"){const b=await request.json(),a=await airline(env.DB,slug);if(!a)return reply({error:"Incorrect username or password."},401,origin);const u=await env.DB.prepare("SELECT * FROM users WHERE airline_id=? AND username=?").bind(a.id,String(b.username||"").trim()).first();if(!u||!(await checkPassword(String(b.password||""),u.password_hash)))return reply({error:"Incorrect username or password."},401,origin);const t=randomToken();await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").bind(await sha(t),u.id,new Date(Date.now()+2592000000).toISOString()).run();return reply({ok:true,username:u.username,miles:u.miles,token:t},200,origin)}
+const u=await currentUser(env.DB,request);if(p.length===3&&p[2]==="me"&&request.method==="GET"){if(!u||u.airline_slug!==slug)return reply({error:"Please log in."},401,origin);return reply({username:u.username,miles:u.miles},200,origin)}
+if(p.length===3&&p[2]==="bookings"&&request.method==="GET"){if(!u||u.airline_slug!==slug)return reply({error:"Please log in."},401,origin);const r=await env.DB.prepare("SELECT booking_id AS bookingId,flight,destination,date,time,gate,passengers,fare,status,booked_at AS bookedAt,miles_earned AS milesEarned FROM bookings WHERE user_id=? ORDER BY id DESC").bind(u.id).all();return reply({bookings:r.results},200,origin)}
+if(p.length===3&&p[2]==="bookings"&&request.method==="POST"){if(!u||u.airline_slug!==slug)return reply({error:"Please log in."},401,origin);const b=await request.json(),f=await env.DB.prepare("SELECT * FROM flights WHERE airline_id=? AND flight=?").bind(u.airline_id,String(b.flight||"")).first();if(!f)return reply({error:"Flight not found."},400,origin);const id=bookingId(),miles=500,fare=Number(String(f.price).replace(/[^0-9]/g,""))||0;await env.DB.batch([env.DB.prepare("INSERT INTO bookings(booking_id,user_id,airline_id,name,flight,destination,date,time,gate,passengers,fare,miles_earned,status,booked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,u.id,u.airline_id,String(b.name||u.username).slice(0,40),f.flight,f.destination,String(b.date||""),f.departure,f.gate,String(b.passengers||"1 passenger"),fare,miles,"Confirmed",iso()),env.DB.prepare("UPDATE users SET miles=miles+? WHERE id=?").bind(miles,u.id)]);return reply({ok:true,bookingId:id,milesEarned:miles},201,origin)}
+if(p.length===5&&p[2]==="bookings"&&p[4]==="cancel"&&request.method==="POST"){if(!u||u.airline_slug!==slug)return reply({error:"Please log in."},401,origin);const b=await env.DB.prepare("SELECT * FROM bookings WHERE booking_id=? AND user_id=?").bind(p[3],u.id).first();if(!b)return reply({error:"Booking not found."},404,origin);if(b.status==="Cancelled")return reply({error:"Booking is already cancelled."},400,origin);await env.DB.batch([env.DB.prepare("UPDATE bookings SET status='Cancelled' WHERE booking_id=? AND user_id=?").bind(p[3],u.id),env.DB.prepare("UPDATE users SET miles=MAX(0,miles-?) WHERE id=?").bind(b.miles_earned,u.id)]);return reply({ok:true},200,origin)}return reply({error:"Not found."},404,origin)}catch(e){return reply({error:"Server error.",detail:String(e.message||e)},500,origin)}}};
