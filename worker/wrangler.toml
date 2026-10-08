@@ -5,7 +5,7 @@ compatibility_date = "2026-10-08"
 [[d1_databases]]
 binding = "DB"
 database_name = "lupin-cloud"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "a77e4e58-b9d3-4fa2-9632-58d0ba4cddf3"
 
 [vars]
 CORS_ORIGIN = "*"
