@@ -128,6 +128,8 @@ export default {
           ]);
           return reply({ users: ur.results || [], bookings: br.results || [], flights: fr.results || [], admins: ar.results || [], suspended: (sr.results || []).map(x => x.user_id) }, 200, origin);
         }
+        // Invited administrators are strictly read-only. Only the primary account may mutate accounts or admin access.
+        if (!primary && request.method !== "GET") return reply({ error: "Read-only administrator access. Only the primary administrator can make changes." }, 403, origin);
         if (p.length === 6 && p[3] === "users" && p[4] && request.method === "POST") {
           const target = await env.DB.prepare("SELECT * FROM users WHERE airline_id=? AND username=?").bind(a.id, decodeURIComponent(p[4])).first();
           if (!target) return reply({ error: "Account not found." }, 404, origin);
