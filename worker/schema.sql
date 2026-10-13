@@ -56,3 +56,19 @@ CREATE INDEX IF NOT EXISTS idx_users_airline_username ON users(airline_id, usern
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);
 CREATE INDEX IF NOT EXISTS idx_flights_airline ON flights(airline_id);
+
+-- Global Lupin Cloud accounts shared by every Lupin project.
+CREATE TABLE IF NOT EXISTS lupin_accounts (
+ id TEXT PRIMARY KEY,
+ username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+ password_hash TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lupin_sessions (
+ token_hash TEXT PRIMARY KEY,
+ account_id TEXT NOT NULL,
+ expires_at TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ FOREIGN KEY(account_id) REFERENCES lupin_accounts(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_lupin_sessions_expiry ON lupin_sessions(expires_at);
