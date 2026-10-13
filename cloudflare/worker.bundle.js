@@ -133,7 +133,6 @@ export default {
         if (p.length === 6 && p[3] === "users" && p[4] && request.method === "POST") {
           const target = await env.DB.prepare("SELECT * FROM users WHERE airline_id=? AND username=?").bind(a.id, decodeURIComponent(p[4])).first();
           if (!target) return reply({ error: "Account not found." }, 404, origin);
-          if (String(target.username).toLowerCase() === "lupin2015") return reply({ error: "The primary administrator is protected." }, 403, origin);
           if (p.length === 6 && p[5] === "miles") {
             const b = await request.json(), miles = Number(b.miles);
             if (!Number.isSafeInteger(miles) || miles < 0 || miles > 1000000000) return reply({ error: "Miles must be a whole number from 0 to 1,000,000,000." }, 400, origin);
@@ -148,6 +147,7 @@ export default {
             return reply({ ok: true, message: "Password reset. Existing sessions have been signed out." }, 200, origin);
           }
           if (p.length === 6 && p[5] === "ban") {
+            if (String(target.username).toLowerCase() === "lupin2015") return reply({ error: "You cannot suspend the primary administrator account." }, 403, origin);
             if (await env.DB.prepare("SELECT user_id FROM control_admins WHERE user_id=? AND airline_id=?").bind(target.id, a.id).first()) return reply({ error: "Revoke administrator access before suspending this account." }, 409, origin);
             const b = await request.json();
             if (b.banned) await env.DB.batch([env.DB.prepare("INSERT INTO control_suspensions(user_id,airline_id,suspended_by,created_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET suspended_by=excluded.suspended_by,created_at=excluded.created_at").bind(target.id,a.id,user.id,iso()),env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(target.id)]);
