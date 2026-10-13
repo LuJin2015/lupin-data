@@ -155,6 +155,43 @@ export default {
             return reply({ ok: true, banned: !!b.banned }, 200, origin);
           }
         }
+        // Flight changes are restricted to the primary administrator.
+        if (primary && p.length === 4 && p[3] === "flights" && request.method === "POST") {
+          const b = await request.json();
+          const flight = String(b.flight || "").trim();
+          const destination = String(b.destination || "").trim();
+          const gate = String(b.gate || "").trim();
+          const departure = String(b.departure || "").trim();
+          const price = String(b.price || "").trim();
+          if (!/^[A-Za-z0-9 -]{2,20}$/.test(flight) || !destination || destination.length > 120 || !gate || gate.length > 20 || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(departure) || !price || price.length > 30) {
+            return reply({ error: "Enter a flight code, destination, gate, departure time (HH:MM), and price." }, 400, origin);
+          }
+          const exists = await env.DB.prepare("SELECT id FROM flights WHERE airline_id=? AND flight=?").bind(a.id, flight).first();
+          if (exists) return reply({ error: "That flight code already exists. Use the edit endpoint to update it." }, 409, origin);
+          await env.DB.prepare("INSERT INTO flights(airline_id,flight,destination,gate,departure,price) VALUES(?,?,?,?,?,?)").bind(a.id, flight, destination, gate, departure, price).run();
+          return reply({ ok: true, flight }, 201, origin);
+        }
+        if (primary && p.length === 5 && p[3] === "flights" && request.method === "POST") {
+          const oldCode = decodeURIComponent(p[4] || ""), b = await request.json();
+          const flight = String(b.flight || oldCode).trim();
+          const destination = String(b.destination || "").trim();
+          const gate = String(b.gate || "").trim();
+          const departure = String(b.departure || "").trim();
+          const price = String(b.price || "").trim();
+          if (!/^[A-Za-z0-9 -]{2,20}$/.test(flight) || !destination || destination.length > 120 || !gate || gate.length > 20 || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(departure) || !price || price.length > 30) {
+            return reply({ error: "Enter a flight code, destination, gate, departure time (HH:MM), and price." }, 400, origin);
+          }
+          const existing = await env.DB.prepare("SELECT id FROM flights WHERE airline_id=? AND flight=?").bind(a.id, oldCode).first();
+          if (!existing) return reply({ error: "Flight not found." }, 404, origin);
+          if (flight !== oldCode) {
+            const duplicate = await env.DB.prepare("SELECT id FROM flights WHERE airline_id=? AND flight=?").bind(a.id, flight).first();
+            if (duplicate) return reply({ error: "That flight code is already in use." }, 409, origin);
+            const bookings = await env.DB.prepare("SELECT COUNT(*) AS n FROM bookings WHERE airline_id=? AND flight=?").bind(a.id, oldCode).first();
+            if (Number(bookings?.n || 0) > 0) return reply({ error: "Cannot change a flight code while bookings reference it." }, 409, origin);
+          }
+          await env.DB.prepare("UPDATE flights SET flight=?,destination=?,gate=?,departure=?,price=? WHERE id=? AND airline_id=?").bind(flight,destination,gate,departure,price,existing.id,a.id).run();
+          return reply({ ok: true, flight }, 200, origin);
+        }
         if (p.length === 4 && p[3] === "invites" && request.method === "POST") {
           const b = await request.json(), username = String(b.username || "").trim();
           const target = await env.DB.prepare("SELECT id,username FROM users WHERE airline_id=? AND username=?").bind(a.id,username).first();
