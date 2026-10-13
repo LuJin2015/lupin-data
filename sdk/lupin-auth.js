@@ -37,6 +37,14 @@
   const api = { apiBase: API, session: read, current: () => read()?.user?.username || "", login, register, me, logout };
   window.LUPIN_AUTH = api;
 
+  // Keep other Lupin tabs in sync when a sibling app signs in or out.
+  window.addEventListener("storage", event => {
+    if (event.key !== KEY) return;
+    const session = read();
+    window.dispatchEvent(new CustomEvent("lupin-auth-change", { detail: session }));
+    if (session?.token) me().catch(() => {});
+  });
+
   function mountWidget() {
     if (!document.body || document.getElementById("lupin-cloud-widget")) return;
     const style = document.createElement("style");
