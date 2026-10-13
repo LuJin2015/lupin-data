@@ -1,9 +1,9 @@
-/* Deployment snapshot of lupin-data-api. Update this snapshot when the live Worker changes. */
+/* Deployment snapshot of lupin-data-api. Updated with Control Tower authorization and admin API. */
 const headers = origin => ({
   "content-type": "application/json; charset=utf-8",
   "access-control-allow-origin": origin || "*",
   "access-control-allow-headers": "content-type, authorization",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
   "cache-control": "no-store"
 });
 const reply = (data, status = 200, origin) => new Response(JSON.stringify(data), { status, headers: headers(origin) });
@@ -43,7 +43,10 @@ async function currentUser(db, request) {
   const auth = request.headers.get("authorization") || "", token = auth.trim().split(" ").slice(1).join(" ");
   if (!token) return null;
   const hash = await sha(token);
-  return db.prepare("SELECT users.*,airlines.slug AS airline_slug FROM sessions JOIN users ON users.id=sessions.user_id JOIN airlines ON airlines.id=users.airline_id WHERE sessions.token_hash=? AND sessions.expires_at>?").bind(hash, iso()).first();
+  const user = await db.prepare("SELECT users.*,airlines.slug AS airline_slug FROM sessions JOIN users ON users.id=sessions.user_id JOIN airlines ON airlines.id=users.airline_id WHERE sessions.token_hash=? AND sessions.expires_at>?").bind(hash, iso()).first();
+  if (!user) return null;
+  const suspended = await db.prepare("SELECT user_id FROM control_suspensions WHERE user_id=? AND airline_id=?").bind(user.id, user.airline_id).first();
+  return suspended ? null : user;
 }
 function passengerCount(value) {
   const match = String(value || "1 passenger").match(/[0-9]+/);
@@ -100,11 +103,74 @@ export default {
         if (!a) return reply({ error: "Incorrect username or password." }, 401, origin);
         const user = await env.DB.prepare("SELECT * FROM users WHERE airline_id=? AND username=?").bind(a.id, String(b.username || "").trim()).first();
         if (!user || !await checkPassword(String(b.password || ""), user.password_hash)) return reply({ error: "Incorrect username or password." }, 401, origin);
+        const suspension = await env.DB.prepare("SELECT user_id FROM control_suspensions WHERE user_id=? AND airline_id=?").bind(user.id, a.id).first();
+        if (suspension) return reply({ error: "This account is suspended. Contact Lupin Airlines support." }, 403, origin);
         const t = randomToken();
         await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").bind(await sha(t), user.id, new Date(Date.now() + 2592000000).toISOString()).run();
         return reply({ ok: true, username: user.username, miles: user.miles, token: t }, 200, origin);
       }
       const user = await currentUser(env.DB, request);
+      const adminPath = p[2] === "admin";
+      if (adminPath) {
+        const a = slug === "lupin-airlines" ? await airline(env.DB, slug) : null;
+        if (!a || !user || user.airline_slug !== slug) return reply({ error: "Sign in required." }, 401, origin);
+        const primary = String(user.username).toLowerCase() === "lupin2015";
+        const invited = await env.DB.prepare("SELECT user_id FROM control_admins WHERE user_id=? AND airline_id=?").bind(user.id, a.id).first();
+        if (p.length === 4 && p[3] === "me" && request.method === "GET") return primary || invited ? reply({ ok: true, username: user.username, role: primary ? "primary" : "admin" }, 200, origin) : reply({ error: "Not an administrator." }, 403, origin);
+        if (!primary && !invited) return reply({ error: "Not an administrator." }, 403, origin);
+        if (p.length === 4 && p[3] === "overview" && request.method === "GET") {
+          const [ur, br, fr, ar, sr] = await Promise.all([
+            env.DB.prepare("SELECT u.username,u.miles,u.created_at,EXISTS(SELECT 1 FROM control_suspensions s WHERE s.user_id=u.id AND s.airline_id=u.airline_id) AS banned FROM users u WHERE u.airline_id=? ORDER BY u.username").bind(a.id).all(),
+            env.DB.prepare("SELECT b.booking_id,b.flight,b.destination,b.date,b.status,u.username FROM bookings b JOIN users u ON u.id=b.user_id WHERE b.airline_id=? ORDER BY b.id DESC LIMIT 500").bind(a.id).all(),
+            env.DB.prepare("SELECT flight,destination,gate,departure,price FROM flights WHERE airline_id=? ORDER BY id").bind(a.id).all(),
+            env.DB.prepare("SELECT u.username FROM control_admins c JOIN users u ON u.id=c.user_id WHERE c.airline_id=? ORDER BY u.username").bind(a.id).all(),
+            env.DB.prepare("SELECT user_id FROM control_suspensions WHERE airline_id=?").bind(a.id).all()
+          ]);
+          return reply({ users: ur.results || [], bookings: br.results || [], flights: fr.results || [], admins: ar.results || [], suspended: (sr.results || []).map(x => x.user_id) }, 200, origin);
+        }
+        if (p.length === 6 && p[3] === "users" && p[4] && request.method === "POST") {
+          const target = await env.DB.prepare("SELECT * FROM users WHERE airline_id=? AND username=?").bind(a.id, decodeURIComponent(p[4])).first();
+          if (!target) return reply({ error: "Account not found." }, 404, origin);
+          if (String(target.username).toLowerCase() === "lupin2015") return reply({ error: "The primary administrator is protected." }, 403, origin);
+          if (p.length === 6 && p[5] === "miles") {
+            const b = await request.json(), miles = Number(b.miles);
+            if (!Number.isSafeInteger(miles) || miles < 0 || miles > 1000000000) return reply({ error: "Miles must be a whole number from 0 to 1,000,000,000." }, 400, origin);
+            await env.DB.prepare("UPDATE users SET miles=? WHERE id=? AND airline_id=?").bind(miles, target.id, a.id).run();
+            return reply({ ok: true, username: target.username, miles }, 200, origin);
+          }
+          if (p.length === 6 && p[5] === "password") {
+            const b = await request.json(), password = String(b.password || "");
+            if (password.length < 8 || password.length > 256) return reply({ error: "Password must be 8–256 characters." }, 400, origin);
+            const passwordHash = await hashPassword(password);
+            await env.DB.batch([env.DB.prepare("UPDATE users SET password_hash=? WHERE id=?").bind(passwordHash, target.id), env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(target.id)]);
+            return reply({ ok: true, message: "Password reset. Existing sessions have been signed out." }, 200, origin);
+          }
+          if (p.length === 6 && p[5] === "ban") {
+            if (await env.DB.prepare("SELECT user_id FROM control_admins WHERE user_id=? AND airline_id=?").bind(target.id, a.id).first()) return reply({ error: "Revoke administrator access before suspending this account." }, 409, origin);
+            const b = await request.json();
+            if (b.banned) await env.DB.batch([env.DB.prepare("INSERT INTO control_suspensions(user_id,airline_id,suspended_by,created_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET suspended_by=excluded.suspended_by,created_at=excluded.created_at").bind(target.id,a.id,user.id,iso()),env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(target.id)]);
+            else await env.DB.prepare("DELETE FROM control_suspensions WHERE user_id=? AND airline_id=?").bind(target.id,a.id).run();
+            return reply({ ok: true, banned: !!b.banned }, 200, origin);
+          }
+        }
+        if (p.length === 4 && p[3] === "invites" && request.method === "POST") {
+          const b = await request.json(), username = String(b.username || "").trim();
+          const target = await env.DB.prepare("SELECT id,username FROM users WHERE airline_id=? AND username=?").bind(a.id,username).first();
+          if (!target) return reply({ error: "That username does not exist. Invite an existing account." }, 404, origin);
+          if (String(target.username).toLowerCase() === "lupin2015") return reply({ error: "The primary administrator already has access." }, 409, origin);
+          await env.DB.prepare("INSERT INTO control_admins(user_id,airline_id,invited_by,created_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET invited_by=excluded.invited_by,created_at=excluded.created_at").bind(target.id,a.id,user.id,iso()).run();
+          return reply({ ok: true, username: target.username }, 201, origin);
+        }
+        if (p.length === 5 && p[3] === "invites" && request.method === "DELETE") {
+          const username = decodeURIComponent(p[4] || "");
+          const target = await env.DB.prepare("SELECT id,username FROM users WHERE airline_id=? AND username=?").bind(a.id,username).first();
+          if (!target) return reply({ error: "Account not found." }, 404, origin);
+          if (String(target.username).toLowerCase() === "lupin2015") return reply({ error: "The primary administrator is protected." }, 403, origin);
+          await env.DB.prepare("DELETE FROM control_admins WHERE user_id=? AND airline_id=?").bind(target.id,a.id).run();
+          return reply({ ok: true }, 200, origin);
+        }
+        return reply({ error: "Admin endpoint not found." }, 404, origin);
+      }
       if (p.length === 3 && p[2] === "me" && request.method === "GET") {
         if (!user || user.airline_slug !== slug) return reply({ error: "Please log in." }, 401, origin);
         return reply({ username: user.username, miles: user.miles }, 200, origin);
