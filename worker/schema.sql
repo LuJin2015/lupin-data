@@ -72,3 +72,16 @@ CREATE TABLE IF NOT EXISTS lupin_sessions (
  FOREIGN KEY(account_id) REFERENCES lupin_accounts(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_lupin_sessions_expiry ON lupin_sessions(expires_at);
+
+-- Explicit, verified links between a global identity and an app-specific airline account.
+CREATE TABLE IF NOT EXISTS lupin_account_links (
+ account_id TEXT NOT NULL,
+ airline_id INTEGER NOT NULL,
+ user_id INTEGER NOT NULL,
+ linked_at TEXT NOT NULL,
+ PRIMARY KEY(account_id, airline_id),
+ UNIQUE(user_id, airline_id),
+ FOREIGN KEY(account_id) REFERENCES lupin_accounts(id) ON DELETE CASCADE,
+ FOREIGN KEY(airline_id) REFERENCES airlines(id) ON DELETE CASCADE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
