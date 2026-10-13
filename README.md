@@ -51,3 +51,7 @@ Previous Lupin Airlines account data was retired and is not migrated. This repos
 
 The Lupin Airlines website uses GitHub authorization to let an authorized project collaborator trigger the cloud workflow. Each person using write operations needs GitHub access to this repository.
 
+
+## Shared Lupin Cloud identity
+
+Global account endpoints are served by the Cloudflare Worker at `https://lupin-data-api.lujinsg.workers.dev/api/auth`. The browser SDK is `sdk/lupin-auth.js`; it provides register, login, session restore, logout, and a compact account widget for static Lupin projects. The D1 tables `lupin_accounts` and `lupin_sessions` hold global identities and hashed session tokens. App-specific records (such as airline bookings and miles) remain separately permissioned.
