@@ -9,6 +9,38 @@ function randomToken(){const b=new Uint8Array(32);crypto.getRandomValues(b);retu
 async function airline(db,slug){return db.prepare("SELECT * FROM airlines WHERE slug=?").bind(slug).first()}async function ensureAirline(db,slug){let a=await airline(db,slug);if(a)return a;await db.prepare("INSERT INTO airlines(slug,name,created_at) VALUES(?,?,?)").bind(slug,slug==="lupin-airlines"?"Lupin Airlines":slug,iso()).run();return airline(db,slug)}
 async function currentUser(db,request){const auth=request.headers.get("authorization")||"",token=auth.replace(/^Bearer\s+/i,"").trim();if(!token)return null;const hash=await sha(token);return db.prepare("SELECT users.*,airlines.slug AS airline_slug FROM sessions JOIN users ON users.id=sessions.user_id JOIN airlines ON airlines.id=users.airline_id WHERE sessions.token_hash=? AND sessions.expires_at>?").bind(hash,iso()).first()}
 export default {async fetch(request,env){const origin=env.CORS_ORIGIN||"*";if(request.method==="OPTIONS")return new Response(null,{status:204,headers:headers(origin)});const url=new URL(request.url),p=url.pathname.split("/").filter(Boolean);try{if(p[0]!=="api")return reply({ok:true,service:"lupin-cloud"},200,origin);const slug=p[1];
+// Shared Lupin Cloud identity endpoints. Every Lupin project uses this same account namespace.
+if(p[1]==="auth"){
+ if(p.length===3&&p[2]==="register"&&request.method==="POST"){
+  let b;try{b=await request.json()}catch{return reply({error:"Enter valid account details."},400,origin)}
+  const username=String(b.username||"").trim(),password=String(b.password||"");
+  if(!/^[A-Za-z0-9_-]{3,20}$/.test(username))return reply({error:"Username must be 3–20 letters, numbers, _ or -."},400,origin);
+  if(password.length<8||password.length>128)return reply({error:"Password must be 8–128 characters."},400,origin);
+  const exists=await env.DB.prepare("SELECT id FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
+  if(exists)return reply({error:"That Lupin Cloud username is already taken."},409,origin);
+  const id=crypto.randomUUID(),password_hash=await hashPassword(password),created_at=iso();
+  try{await env.DB.prepare("INSERT INTO lupin_accounts(id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(id,username,password_hash,created_at).run()}catch{return reply({error:"Could not create the account. Try another username."},409,origin)}
+  const token=randomToken(),expires_at=new Date(Date.now()+2592000000).toISOString();
+  await env.DB.prepare("INSERT INTO lupin_sessions(token_hash,account_id,expires_at,created_at) VALUES(?,?,?,?)").bind(await sha(token),id,expires_at,created_at).run();
+  return reply({ok:true,token,expiresAt:expires_at,user:{id,username,createdAt:created_at}},201,origin)
+ }
+ if(p.length===3&&p[2]==="login"&&request.method==="POST"){
+  let b;try{b=await request.json()}catch{return reply({error:"Enter your username and password."},400,origin)}
+  const username=String(b.username||"").trim(),password=String(b.password||"");
+  const user=await env.DB.prepare("SELECT id,username,password_hash,created_at FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
+  if(!user||!await checkPassword(password,user.password_hash))return reply({error:"Incorrect username or password."},401,origin);
+  const token=randomToken(),created_at=iso(),expires_at=new Date(Date.now()+2592000000).toISOString();
+  await env.DB.prepare("INSERT INTO lupin_sessions(token_hash,account_id,expires_at,created_at) VALUES(?,?,?,?)").bind(await sha(token),user.id,expires_at,created_at).run();
+  return reply({ok:true,token,expiresAt:expires_at,user:{id:user.id,username:user.username,createdAt:user.created_at}},200,origin)
+ }
+ const auth=(request.headers.get("authorization")||"").replace(/^Bearer\\s+/i,"").trim();
+ if(!auth)return reply({error:"Sign in required."},401,origin);
+ const tokenHash=await sha(auth),session=await env.DB.prepare("SELECT a.id,a.username,a.created_at,s.expires_at FROM lupin_sessions s JOIN lupin_accounts a ON a.id=s.account_id WHERE s.token_hash=? AND s.expires_at>?").bind(tokenHash,iso()).first();
+ if(p.length===3&&p[2]==="me"&&request.method==="GET")return session?reply({ok:true,user:{id:session.id,username:session.username,createdAt:session.created_at}},200,origin):reply({error:"Session expired. Please sign in again."},401,origin);
+ if(p.length===3&&p[2]==="logout"&&request.method==="POST"){await env.DB.prepare("DELETE FROM lupin_sessions WHERE token_hash=?").bind(tokenHash).run();return reply({ok:true},200,origin)}
+ return reply({error:"Unknown Lupin Cloud auth endpoint."},404,origin)
+}
+
 if(p.length===3&&p[2]==="flights"&&request.method==="GET"){const a=await airline(env.DB,slug);if(!a)return reply({flights:[]},200,origin);const r=await env.DB.prepare("SELECT flight,destination,gate,departure,price FROM flights WHERE airline_id=? ORDER BY id").bind(a.id).all();return reply({flights:r.results},200,origin)}
 if(p.length===3&&p[2]==="register"&&request.method==="POST"){const b=await request.json(),username=String(b.username||"").trim(),password=String(b.password||"");if(!/^[A-Za-z0-9_-]{3,20}$/.test(username))return reply({error:"Username must be 3–20 letters, numbers, _ or -."},400,origin);if(password.length<6)return reply({error:"Password must be at least 6 characters."},400,origin);const a=await ensureAirline(env.DB,slug),exists=await env.DB.prepare("SELECT id FROM users WHERE airline_id=? AND username=?").bind(a.id,username).first();if(exists)return reply({error:"That username is already in use."},409,origin);const ph=await hashPassword(password),r=await env.DB.prepare("INSERT INTO users(airline_id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(a.id,username,ph,iso()).run(),t=randomToken();await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").bind(await sha(t),r.meta.last_row_id,new Date(Date.now()+2592000000).toISOString()).run();return reply({ok:true,username,miles:0,token:t},201,origin)}
 if(p.length===3&&p[2]==="login"&&request.method==="POST"){const b=await request.json(),a=await airline(env.DB,slug);if(!a)return reply({error:"Incorrect username or password."},401,origin);const u=await env.DB.prepare("SELECT * FROM users WHERE airline_id=? AND username=?").bind(a.id,String(b.username||"").trim()).first();if(!u||!(await checkPassword(String(b.password||""),u.password_hash)))return reply({error:"Incorrect username or password."},401,origin);const t=randomToken();await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").bind(await sha(t),u.id,new Date(Date.now()+2592000000).toISOString()).run();return reply({ok:true,username:u.username,miles:u.miles,token:t},200,origin)}
