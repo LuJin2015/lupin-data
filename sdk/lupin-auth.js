@@ -2,9 +2,12 @@
 (() => {
   const API = "https://lupin-data-api.lujinsg.workers.dev/api/auth";
   const KEY = "lupinCloudAccount";
+  const USER_KEY = "lupinCurrentUser";
   const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch { return null; } };
-  const save = value => { localStorage.setItem(KEY, JSON.stringify(value)); window.dispatchEvent(new CustomEvent("lupin-auth-change", { detail: value })); };
-  const clear = () => { localStorage.removeItem(KEY); window.dispatchEvent(new CustomEvent("lupin-auth-change", { detail: null })); };
+  const publicUser = user => user ? { id: user.id, username: user.username, createdAt: user.createdAt || null } : null;
+  const publishUser = user => { const profile = publicUser(user); if (profile) localStorage.setItem(USER_KEY, JSON.stringify(profile)); else localStorage.removeItem(USER_KEY); return profile; };
+  const save = value => { if (value?.user) publishUser(value.user); else localStorage.removeItem(USER_KEY); localStorage.setItem(KEY, JSON.stringify(value)); window.dispatchEvent(new CustomEvent("lupin-auth-change", { detail: value })); };
+  const clear = () => { localStorage.removeItem(KEY); localStorage.removeItem(USER_KEY); window.dispatchEvent(new CustomEvent("lupin-auth-change", { detail: null })); };
   async function request(action, options = {}) {
     const session = read();
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -34,13 +37,16 @@
   async function logout() {
     try { if (read()?.token) await request("logout", { method: "POST", body: "{}" }); } finally { clear(); }
   }
-  const api = { apiBase: API, session: read, current: () => read()?.user?.username || "", login, register, me, logout };
+  // Keep a small profile-only key for sibling apps that need the current identity.
+  const initial = read(); if (initial?.user) publishUser(initial.user); else if (!initial?.token) localStorage.removeItem(USER_KEY);
+  const api = { apiBase: API, session: read, current: () => read()?.user?.username || "", currentUser: () => { try { return JSON.parse(localStorage.getItem(USER_KEY) || "null"); } catch { return null; } }, login, register, me, logout };
   window.LUPIN_AUTH = api;
 
   // Keep other Lupin tabs in sync when a sibling app signs in or out.
   window.addEventListener("storage", event => {
     if (event.key !== KEY) return;
     const session = read();
+    if (session?.user) publishUser(session.user); else localStorage.removeItem(USER_KEY);
     window.dispatchEvent(new CustomEvent("lupin-auth-change", { detail: session }));
     if (session?.token) me().catch(() => {});
   });
