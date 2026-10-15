@@ -1,0 +1,106 @@
+name: Lupin Cloud authentication smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/auth-smoke-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  auth-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Test real registration, login, current-user lookup, and logout
+        env:
+          API_BASE: https://lupin-data-api.lujinsg.workers.dev/api/auth
+          RUN_ID: ${{ github.run_id }}
+          PUBLIC_KEY: |
+            -----BEGIN PUBLIC KEY-----
+            MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqnhABOBy9USw3+10+eOE
+            uaoRrb/IfDkGPjeHdRGIN4hL7j4a6y41jHc1lAUPMzhpergo5K0wTBt1aE75iKMP
+            UkseABoYM6yKrn92yUJJRL3bE2U34UlhuqKc+jym+yrD2962mFAli+GhWQ85IPyS
+            n7ea+/PyTLNHHqjRnjDfga3oTml/77J40FWnf1/HRd1OaQuDVj/p7TuQ3rMIo/RM
+            Rvu9DN9vp4PRI9KoiaASdegmSHMQ04U8dITzVs+s9bO5fzsq/9+f5MFZ5JTYZ68o
+            /WNHfdMvKoII2qZoG2Nj8dqNf8NWY6dRkb2vjFohL4ui5t21S76WeIlc7derrOLZ
+            fwIDAQAB
+            -----END PUBLIC KEY-----
+        run: |
+          node <<'NODE'
+          const { randomBytes, publicEncrypt, constants } = require("node:crypto");
+
+          const API = process.env.API_BASE;
+          const username = "lpt" + Date.now().toString(36) + process.env.RUN_ID.slice(-4);
+          const password = "Lupin-" + randomBytes(18).toString("base64url") + "Aa9!";
+          process.stdout.write("::add-mask::" + password + "\n");
+
+          const report = { username, checks: {} };
+          let testError = null;
+
+          async function request(path, method = "GET", token = "", body = undefined) {
+            const headers = { "Content-Type": "application/json" };
+            if (token) headers.Authorization = "Bearer " + token;
+            const response = await fetch(API + "/" + path, {
+              method,
+              headers,
+              cache: "no-store",
+              ...(body === undefined ? {} : { body: JSON.stringify(body) })
+            });
+            const data = await response.json().catch(() => ({}));
+            return { status: response.status, data };
+          }
+
+          function ensure(condition, message) {
+            if (!condition) throw new Error(message);
+          }
+
+          try {
+            const registration = await request("register", "POST", "", { username, password });
+            report.checks.registration = registration.status;
+            ensure(registration.status === 201, "Registration did not return HTTP 201.");
+            ensure(registration.data.user?.username === username, "Registration returned the wrong user.");
+            const registeredToken = registration.data.token;
+            ensure(typeof registeredToken === "string" && registeredToken.length > 20, "Registration did not return a session token.");
+
+            const regLogout = await request("logout", "POST", registeredToken, {});
+            report.checks.registrationSessionCleanup = regLogout.status;
+            ensure(regLogout.status === 200, "Could not revoke the registration session.");
+
+            const login = await request("login", "POST", "", { username, password });
+            report.checks.login = login.status;
+            ensure(login.status === 200, "Login did not return HTTP 200.");
+            ensure(login.data.user?.username === username, "Login returned the wrong user.");
+            const token = login.data.token;
+            ensure(typeof token === "string" && token.length > 20, "Login did not return a session token.");
+
+            const me = await request("me", "GET", token);
+            report.checks.sessionRestoreMe = me.status;
+            ensure(me.status === 200 && me.data.user?.username === username, "Authenticated /me did not return the new account.");
+
+            const logout = await request("logout", "POST", token, {});
+            report.checks.logout = logout.status;
+            ensure(logout.status === 200, "Logout did not return HTTP 200.");
+
+            const afterLogout = await request("me", "GET", token);
+            report.checks.revokedSessionRejected = afterLogout.status;
+            ensure(afterLogout.status === 401, "A logged-out token was still accepted.");
+
+            report.result = "PASS";
+          } catch (error) {
+            testError = error;
+            report.result = "FAIL";
+            report.error = String(error?.message || error);
+          }
+
+          const ciphertext = publicEncrypt(
+            { key: process.env.PUBLIC_KEY, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+            Buffer.from(JSON.stringify({ username, password }))
+          ).toString("base64");
+
+          console.log("AUTH_TEST_REPORT=" + JSON.stringify(report));
+          console.log("CREDENTIALS_CIPHERTEXT=" + ciphertext);
+          if (testError) process.exit(1);
+          NODE
