@@ -57,6 +57,14 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);
 CREATE INDEX IF NOT EXISTS idx_flights_airline ON flights(airline_id);
 
+-- Explicit Control Tower administrator invitations (only the primary owner can manage these).
+CREATE TABLE IF NOT EXISTS lupin_admin_invites (
+ account_id TEXT PRIMARY KEY,
+ invited_by TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ FOREIGN KEY(account_id) REFERENCES lupin_accounts(id) ON DELETE CASCADE
+);
+
 -- Global Lupin Cloud accounts shared by every Lupin project.
 CREATE TABLE IF NOT EXISTS lupin_accounts (
  id TEXT PRIMARY KEY,
