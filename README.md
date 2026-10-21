@@ -55,3 +55,14 @@ The Lupin Airlines website uses GitHub authorization to let an authorized projec
 ## Shared Lupin Cloud identity
 
 Global account endpoints are served by the Cloudflare Worker at `https://lupin-data-api.lujinsg.workers.dev/api/auth`. The browser SDK is `sdk/lupin-auth.js`; it provides register, login, session restore, logout, and a compact account widget for static Lupin projects. The D1 tables `lupin_accounts` and `lupin_sessions` hold global identities and hashed session tokens. App-specific records (such as airline bookings and miles) remain separately permissioned.
+
+## Credits
+
+**Project Lead:** Lu Jin
+
+**AI Development Assistant:** ChatGPT by OpenAI
+
+ChatGPT assisted with coding, debugging, documentation, and design. The Lupin projects were developed through human direction and AI assistance.
+
+Intellectual property rights remain subject to applicable law and the rights of the respective contributors and third-party authors.
+
