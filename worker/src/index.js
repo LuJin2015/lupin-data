@@ -1,5 +1,5 @@
 const headers = (origin) => ({
-  "content-type":"application/json; charset=utf-8","access-control-allow-origin":origin||"*","access-control-allow-headers":"content-type, authorization, x-lupin-cloud-token","access-control-allow-methods":"GET, POST, OPTIONS","cache-control":"no-store"
+  "content-type":"application/json; charset=utf-8","access-control-allow-origin":origin||"*","access-control-allow-headers":"content-type, authorization, x-lupin-cloud-token","access-control-allow-methods":"GET, POST, DELETE, OPTIONS","cache-control":"no-store"
 });
 const reply=(data,status,origin)=>new Response(JSON.stringify(data),{status:status||200,headers:headers(origin)});const enc=new TextEncoder();const iso=()=>new Date().toISOString();
 async function sha(v){const b=await crypto.subtle.digest("SHA-256",enc.encode(v));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
@@ -39,6 +39,73 @@ if(p[1]==="auth"){
  if(p.length===3&&p[2]==="me"&&request.method==="GET")return session?reply({ok:true,user:{id:session.id,username:session.username,createdAt:session.created_at}},200,origin):reply({error:"Session expired. Please sign in again."},401,origin);
  if(p.length===3&&p[2]==="logout"&&request.method==="POST"){await env.DB.prepare("DELETE FROM lupin_sessions WHERE token_hash=?").bind(tokenHash).run();return reply({ok:true},200,origin)}
  return reply({error:"Unknown Lupin Cloud auth endpoint."},404,origin)
+}
+
+
+/* Control Tower routes: authenticate against the shared Lupin Cloud session, never a client-supplied role. */
+if(slug==="lupin-airlines"&&p[2]==="admin"){
+ const auth=(request.headers.get("authorization")||"").replace(/^Bearer\\s+/i,"").trim();
+ if(!auth)return reply({error:"Sign in with your Lupin Cloud account."},401,origin);
+ const owner=await env.DB.prepare("SELECT a.id,a.username FROM lupin_sessions s JOIN lupin_accounts a ON a.id=s.account_id WHERE s.token_hash=? AND s.expires_at>?").bind(await sha(auth),iso()).first();
+ if(!owner)return reply({error:"Lupin Cloud session is invalid or expired."},401,origin);
+ const primary=String(owner.username).toLowerCase()==="lupin2015";
+ const invited=primary?null:await env.DB.prepare("SELECT account_id FROM lupin_admin_invites WHERE account_id=?").bind(owner.id).first();
+ if(!primary&&!invited)return reply({error:"Administrator access denied."},403,origin);
+ const role=primary?"primary":"admin";
+ if(p.length===4&&p[3]==="me"&&request.method==="GET")return reply({ok:true,username:owner.username,role},200,origin);
+ if(p.length===4&&p[3]==="overview"&&request.method==="GET"){
+  const a=await ensureAirline(env.DB,slug);
+  const [users,bookings,flights,admins]=await Promise.all([
+   env.DB.prepare("SELECT username,miles,created_at,0 AS banned FROM users WHERE airline_id=? ORDER BY username").bind(a.id).all(),
+   env.DB.prepare("SELECT b.booking_id,u.username,b.flight,b.destination,b.date,b.status FROM bookings b JOIN users u ON u.id=b.user_id WHERE b.airline_id=? ORDER BY b.id DESC").bind(a.id).all(),
+   env.DB.prepare("SELECT flight,destination,gate,departure,price FROM flights WHERE airline_id=? ORDER BY id").bind(a.id).all(),
+   env.DB.prepare("SELECT a.username,i.created_at FROM lupin_admin_invites i JOIN lupin_accounts a ON a.id=i.account_id ORDER BY a.username").all()
+  ]);
+  return reply({users:users.results,bookings:bookings.results,flights:flights.results,admins:admins.results},200,origin)
+ }
+ if(!primary)return reply({error:"Only the primary administrator can change Control Tower settings."},403,origin);
+ if(p.length===4&&p[3]==="invites"&&request.method==="POST"){
+  let b={};try{b=await request.json()}catch{return reply({error:"Enter a username to invite."},400,origin)}
+  const username=String(b.username||"").trim();
+  if(!username)return reply({error:"Enter a username to invite."},400,origin);
+  if(username.toLowerCase()==="lupin2015")return reply({error:"The primary administrator is already protected."},400,origin);
+  const target=await env.DB.prepare("SELECT id,username FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
+  if(!target)return reply({error:"That username does not exist in Lupin Cloud yet."},404,origin);
+  await env.DB.prepare("INSERT INTO lupin_admin_invites(account_id,invited_by,created_at) VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET invited_by=excluded.invited_by,created_at=excluded.created_at").bind(target.id,owner.id,iso()).run();
+  return reply({ok:true,username:target.username},200,origin)
+ }
+ if(p.length===5&&p[3]==="invites"&&request.method==="DELETE"){
+  const username=decodeURIComponent(p[4]);
+  if(username.toLowerCase()==="lupin2015")return reply({error:"The primary administrator cannot be removed."},400,origin);
+  const target=await env.DB.prepare("SELECT id FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
+  if(target)await env.DB.prepare("DELETE FROM lupin_admin_invites WHERE account_id=?").bind(target.id).run();
+  return reply({ok:true},200,origin)
+ }
+ if(p.length===4&&p[3]==="flights"&&request.method==="POST"||p.length===5&&p[3]==="flights"&&request.method==="POST"){
+  let b={};try{b=await request.json()}catch{return reply({error:"Enter valid flight details."},400,origin)}
+  const flight=String(b.flight||"").trim(),destination=String(b.destination||"").trim(),gate=String(b.gate||"").trim(),departure=String(b.departure||"").trim(),price=String(b.price||"").trim();
+  if(!flight||!destination||!gate||!departure||!price)return reply({error:"All flight fields are required."},400,origin);
+  const a=await ensureAirline(env.DB,slug);
+  if(p.length===4){
+   try{await env.DB.prepare("INSERT INTO flights(airline_id,flight,destination,gate,departure,price) VALUES(?,?,?,?,?,?)").bind(a.id,flight,destination,gate,departure,price).run()}
+   catch{return reply({error:"That flight code already exists or could not be saved."},409,origin)}
+  }else{
+   const oldFlight=decodeURIComponent(p[4]);
+   const result=await env.DB.prepare("UPDATE flights SET flight=?,destination=?,gate=?,departure=?,price=? WHERE airline_id=? AND flight=?").bind(flight,destination,gate,departure,price,a.id,oldFlight).run();
+   if(!result.meta?.changes)return reply({error:"Flight not found or no changes were made."},404,origin)
+  }
+  return reply({ok:true,flight},200,origin)
+ }
+ if(p.length===6&&p[3]==="users"&&p[5]==="miles"&&request.method==="POST"){
+  let b={};try{b=await request.json()}catch{return reply({error:"Enter a miles balance."},400,origin)}
+  const miles=Number(b.miles);
+  if(!Number.isSafeInteger(miles)||miles<0)return reply({error:"Miles must be a non-negative whole number."},400,origin);
+  const a=await ensureAirline(env.DB,slug);
+  const result=await env.DB.prepare("UPDATE users SET miles=? WHERE airline_id=? AND username=? COLLATE NOCASE").bind(miles,a.id,decodeURIComponent(p[4])).run();
+  if(!result.meta?.changes)return reply({error:"Passenger account not found."},404,origin);
+  return reply({ok:true,miles},200,origin)
+ }
+ return reply({error:"Unknown Control Tower endpoint."},404,origin)
 }
 
 if(p.length===3&&p[2]==="flights"&&request.method==="GET"){const a=await airline(env.DB,slug);if(!a)return reply({flights:[]},200,origin);const r=await env.DB.prepare("SELECT flight,destination,gate,departure,price FROM flights WHERE airline_id=? ORDER BY id").bind(a.id).all();return reply({flights:r.results},200,origin)}
