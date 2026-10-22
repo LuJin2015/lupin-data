@@ -53,7 +53,7 @@ if(slug==="lupin-airlines"&&p.length===3&&p[2]==="site-notice"&&request.method==
 
 /* Control Tower routes: authenticate against the shared Lupin Cloud session, never a client-supplied role. */
 if(slug==="lupin-airlines"&&p[2]==="admin"){
- const auth=(request.headers.get("authorization")||"").replace(/^Bearer\\s+/i,"").trim();
+ const auth=(request.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();
  if(!auth)return reply({error:"Sign in with your Lupin Cloud account."},401,origin);
  const owner=await env.DB.prepare("SELECT a.id,a.username FROM lupin_sessions s JOIN lupin_accounts a ON a.id=s.account_id WHERE s.token_hash=? AND s.expires_at>?").bind(await sha(auth),iso()).first();
  if(!owner)return reply({error:"Lupin Cloud session is invalid or expired."},401,origin);
