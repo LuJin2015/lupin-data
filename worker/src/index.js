@@ -83,7 +83,7 @@ if(slug==="lupin-airlines"&&p[2]==="admin"){
   let b={};try{b=await request.json()}catch{return reply({error:"Enter valid notice settings."},400,origin)}
   const enabled=b.enabled!==false,title=String(b.title||"Notice").trim().slice(0,100),text=String(b.text||"").trim().slice(0,1200),linkText=String(b.linkText||"").trim().slice(0,80),href=String(b.href||"").trim().slice(0,500);
   if(!title||!text)return reply({error:"A title and notice text are required."},400,origin);
-  if(href&&!/^(https:\/\/|\/|[a-zA-Z0-9_-])/.test(href))return reply({error:"Enter a valid relative or HTTPS link."},400,origin);
+  if(href&&!(href.startsWith("https://")||(href.startsWith("/")&&!href.startsWith("//"))||/^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/.test(href)))return reply({error:"Enter a valid relative or HTTPS link."},400,origin);
   const a=await ensureAirline(env.DB,slug),notice={enabled,title,text,linkText,href},updatedAt=iso();
   await env.DB.prepare("INSERT INTO site_settings(airline_id,setting_key,setting_value,updated_at) VALUES(?,'site_notice',?,?) ON CONFLICT(airline_id,setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at").bind(a.id,JSON.stringify(notice),updatedAt).run();
   return reply({ok:true,notice,updatedAt},200,origin)
