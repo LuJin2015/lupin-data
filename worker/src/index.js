@@ -42,6 +42,15 @@ if(p[1]==="auth"){
 }
 
 
+
+// Public Lupin Airlines site notice. Configuration is stored in D1 so the Control Tower can edit it.
+if(slug==="lupin-airlines"&&p.length===3&&p[2]==="site-notice"&&request.method==="GET"){
+ const a=await airline(env.DB,slug);
+ const row=a?await env.DB.prepare("SELECT setting_value FROM site_settings WHERE airline_id=? AND setting_key='site_notice'").bind(a.id).first():null;
+ let notice=null;try{notice=row?JSON.parse(row.setting_value):null}catch{}
+ return reply({notice:notice||{enabled:true,title:"Affiliation notice",text:"A separate website using the name “Lupin Air” is not part of the Lupin ecosystem and is not affiliated with or endorsed by Lupin Airlines.",linkText:"",href:""}},200,origin)
+}
+
 /* Control Tower routes: authenticate against the shared Lupin Cloud session, never a client-supplied role. */
 if(slug==="lupin-airlines"&&p[2]==="admin"){
  const auth=(request.headers.get("authorization")||"").replace(/^Bearer\\s+/i,"").trim();
@@ -63,7 +72,22 @@ if(slug==="lupin-airlines"&&p[2]==="admin"){
   ]);
   return reply({users:users.results,bookings:bookings.results,flights:flights.results,admins:admins.results},200,origin)
  }
+ if(p.length===4&&p[3]==="site-notice"&&request.method==="GET"){
+  const a=await ensureAirline(env.DB,slug);
+  const row=await env.DB.prepare("SELECT setting_value,updated_at FROM site_settings WHERE airline_id=? AND setting_key='site_notice'").bind(a.id).first();
+  let notice=null;try{notice=row?JSON.parse(row.setting_value):null}catch{}
+  return reply({ok:true,notice:notice||{enabled:true,title:"Affiliation notice",text:"A separate website using the name “Lupin Air” is not part of the Lupin ecosystem and is not affiliated with or endorsed by Lupin Airlines.",linkText:"",href:""},updatedAt:row?.updated_at||null},200,origin)
+ }
  if(!primary)return reply({error:"Only the primary administrator can change Control Tower settings."},403,origin);
+ if(p.length===4&&p[3]==="site-notice"&&request.method==="POST"){
+  let b={};try{b=await request.json()}catch{return reply({error:"Enter valid notice settings."},400,origin)}
+  const enabled=b.enabled!==false,title=String(b.title||"Notice").trim().slice(0,100),text=String(b.text||"").trim().slice(0,1200),linkText=String(b.linkText||"").trim().slice(0,80),href=String(b.href||"").trim().slice(0,500);
+  if(!title||!text)return reply({error:"A title and notice text are required."},400,origin);
+  if(href&&!/^(https:\/\/|\/|[a-zA-Z0-9_-])/.test(href))return reply({error:"Enter a valid relative or HTTPS link."},400,origin);
+  const a=await ensureAirline(env.DB,slug),notice={enabled,title,text,linkText,href},updatedAt=iso();
+  await env.DB.prepare("INSERT INTO site_settings(airline_id,setting_key,setting_value,updated_at) VALUES(?,'site_notice',?,?) ON CONFLICT(airline_id,setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at").bind(a.id,JSON.stringify(notice),updatedAt).run();
+  return reply({ok:true,notice,updatedAt},200,origin)
+ }
  if(p.length===4&&p[3]==="invites"&&request.method==="POST"){
   let b={};try{b=await request.json()}catch{return reply({error:"Enter a username to invite."},400,origin)}
   const username=String(b.username||"").trim();
